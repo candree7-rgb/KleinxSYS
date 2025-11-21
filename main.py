@@ -34,7 +34,7 @@ QUOTE = os.getenv("QUOTE", "USDT").strip().upper()
 LEVERAGE_1 = int(os.getenv("LEVERAGE_1", "5"))
 LEVERAGE_2 = int(os.getenv("LEVERAGE_2", "10"))
 
-# >>> NEU: Limit für Anzahl Take-Profit-Orders (z.B. Demo: 3)
+# >>> NEU: Limit für Anzahl Take-Profit-Orders (z.B. Demo: 3–4)
 MAX_TAKE_PROFIT_ORDERS = int(os.getenv("MAX_TAKE_PROFIT_ORDERS", "4"))
 
 # TP-Split (30/30/30) + Runner (10% via SL/Trail abgesichert)
@@ -66,13 +66,14 @@ DCA1_DIST_PCT       = float(os.getenv("DCA1_DIST_PCT", "5"))
 DCA2_DIST_PCT       = float(os.getenv("DCA2_DIST_PCT", "10"))
 DCA3_DIST_PCT       = float(os.getenv("DCA3_DIST_PCT", "20"))
 
-# Limit-Order Ablauf (Zeit)
+# Limit-Order Ablauf (Zeit – generelle Max-Dauer)
 ENTRY_EXPIRATION_MIN= int(os.getenv("ENTRY_EXPIRATION_MIN", "180"))
 
 # Entry-Condition
 ENTRY_WAIT_MINUTES         = int(os.getenv("ENTRY_WAIT_MINUTES", "0"))             # 0 = keine Zeit-Bedingung
 ENTRY_TRIGGER_BUFFER_PCT   = float(os.getenv("ENTRY_TRIGGER_BUFFER_PCT", "0.0"))   # Trigger-Puffer
-ENTRY_EXPIRATION_PRICE_PCT = float(os.getenv("ENTRY_EXPIRATION_PRICE_PCT", "0.0")) # vorzeitiges Expire nach Preis
+# Wir nutzen das als "Impuls schon gelaufen" – z.B. 0.8 %
+ENTRY_EXPIRATION_PRICE_PCT = float(os.getenv("ENTRY_EXPIRATION_PRICE_PCT", "0.0"))
 
 TEST_MODE           = os.getenv("TEST_MODE", "false").lower() == "true"    # Für Tests
 
@@ -135,8 +136,10 @@ def fetch_messages_after(channel_id: str, after_id: Optional[str], limit: int = 
         params["after"] = str(after_id)
 
     while True:
-        r = requests.get(f"https://discord.com/api/v10/channels/{channel_id}/messages",
-                         headers=HEADERS, params=params, timeout=15)
+        r = requests.get(
+            f"https://discord.com/api/v10/channels/{channel_id}/messages",
+            headers=HEADERS, params=params, timeout=15
+        )
         if r.status_code == 429:
             retry = 5
             try:
@@ -183,18 +186,23 @@ def message_text(m: dict) -> str:
     for e in embeds:
         if not isinstance(e, dict):
             continue
-        if e.get("title"): parts.append(str(e.get("title")))
-        if e.get("description"): parts.append(str(e.get("description")))
+        if e.get("title"):
+            parts.append(str(e.get("title")))
+        if e.get("description"):
+            parts.append(str(e.get("description")))
         fields = e.get("fields") or []
         for f in fields:
             if not isinstance(f, dict):
                 continue
             n = f.get("name") or ""
             v = f.get("value") or ""
-            if n: parts.append(str(n))
-            if v: parts.append(str(v))
+            if n:
+                parts.append(str(n))
+            if v:
+                parts.append(str(v))
         footer = (e.get("footer") or {}).get("text")
-        if footer: parts.append(str(footer))
+        if footer:
+            parts.append(str(footer))
     return clean_markdown("\n".join([p for p in parts if p]))
 
 # =========================
@@ -312,10 +320,18 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
     # Entry-Trigger bleibt Preis-basiert
     if side == "long":
         trigger_price = entry * (1.0 - ENTRY_TRIGGER_BUFFER_PCT/100.0)
-        expire_price  = entry * (1.0 - ENTRY_EXPIRATION_PRICE_PCT/100.0) if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
+        # EXPIRATION-PRICE: Long → oben (Gewinnrichtung)
+        expire_price  = (
+            entry * (1.0 + ENTRY_EXPIRATION_PRICE_PCT/100.0)
+            if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
+        )
     else:
         trigger_price = entry * (1.0 + ENTRY_TRIGGER_BUFFER_PCT/100.0)
-        expire_price  = entry * (1.0 + ENTRY_EXPIRATION_PRICE_PCT/100.0) if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
+        # EXPIRATION-PRICE: Short → unten (Gewinnrichtung)
+        expire_price  = (
+            entry * (1.0 - ENTRY_EXPIRATION_PRICE_PCT/100.0)
+            if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
+        )
 
     # Take Profits als Prozent (folgen Avg-Entry nach DCA)
     tp1_pct = _percent_from_entry(entry, tp1) if tp1 is not None else None
@@ -324,11 +340,20 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
 
     take_profits = []
     if tp1_pct is not None:
-        take_profits.append({"price_percentage": float(f"{tp1_pct:.6f}"), "position_percentage": TP1_PCT})
+        take_profits.append({
+            "price_percentage": float(f"{tp1_pct:.6f}"),
+            "position_percentage": TP1_PCT
+        })
     if tp2_pct is not None:
-        take_profits.append({"price_percentage": float(f"{tp2_pct:.6f}"), "position_percentage": TP2_PCT})
+        take_profits.append({
+            "price_percentage": float(f"{tp2_pct:.6f}"),
+            "position_percentage": TP2_PCT
+        })
     if tp3_pct is not None:
-        take_profits.append({"price_percentage": float(f"{tp3_pct:.6f}"), "position_percentage": TP3_PCT})
+        take_profits.append({
+            "price_percentage": float(f"{tp3_pct:.6f}"),
+            "position_percentage": TP3_PCT
+        })
 
     # Runner prozentual (von TP3 aus weiter)
     runner_pct = None
@@ -344,9 +369,8 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
     # Limit Anzahl Take-Profit-Orders (z.B. Demo-Account)
     if MAX_TAKE_PROFIT_ORDERS > 0 and len(take_profits) > MAX_TAKE_PROFIT_ORDERS:
         take_profits = take_profits[:MAX_TAKE_PROFIT_ORDERS]
-        # wenn Runner abgeschnitten wurde, Log nicht verwirren
         if len(take_profits) < 4:
-            runner_pct = None
+            runner_pct = None  # Runner ggf. abgeschnitten
 
     # DCAs als fixe Preislevels (so wie Signale kommen)
     dca_orders = []
@@ -366,7 +390,7 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         "side": side,
         "order_type": "limit",
         "signal_price": entry,
-        "leverage": leverage,  # <<— aus ENV je Webhook
+        "leverage": leverage,
         "entry_condition": { "price": float(f"{trigger_price:.10f}") },
         "take_profit": take_profits,
         "stop_loss": {
@@ -377,6 +401,7 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         "entry_expiration": { "time": ENTRY_EXPIRATION_MIN }
     }
 
+    # Wenn wir eine Expiration-Price-Logik (z.B. 0.8 %) haben → mitschicken
     if expire_price is not None:
         payload["entry_expiration"]["price"] = float(f"{expire_price:.10f}")
 
@@ -393,12 +418,12 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         f"   Trigger @ {trigger_price:.6f}  |  Expire in {ENTRY_EXPIRATION_MIN} min"
         + (f" oder Preis {expire_price:.6f}" if expire_price else "")
     )
-    print(f"   SL-Modus: {BASE_STOP_MODE}  → {stop_percentage:.2f}% unter Entry")
+    print(f"   SL-Modus: {BASE_STOP_MODE}  → {stop_percentage:.2f}% unter/über Entry")
     if RUNNER_PCT > 0 and runner_pct is not None:
         print(f"   Runner% ≈ {runner_pct:.6f}  |  Trail {RUNNER_TRAILING_DIST:.2f}%")
     print(
         "   DCAs: "
-        + (", ".join([f"{o['quantity_percentage']}%@{o['price']:.6f}" for o in dca_orders]) if dca_orders else "–")
+        + (", ".join([f\"{o['quantity_percentage']}%@{o['price']:.6f}\" for o in dca_orders]) if dca_orders else "–")
     )
     return payload
 
@@ -459,8 +484,10 @@ def main():
     print(f"DCAs: D1 {DCA1_QTY_PCT}%, D2 {DCA2_QTY_PCT}%, D3 {DCA3_QTY_PCT}%")
     print(f"Stop: {BASE_STOP_MODE} + Buffer {SL_BUFFER_PCT}%"
           + (f" | FIXED={STOP_FIXED_PERCENTAGE}%" if BASE_STOP_MODE=='FIXED' else ""))
-    print(f"Entry: Buffer {ENTRY_TRIGGER_BUFFER_PCT}% | Expire {ENTRY_EXPIRATION_MIN} min"
-          + (f" + Preis±{ENTRY_EXPIRATION_PRICE_PCT}%" if ENTRY_EXPIRATION_PRICE_PCT>0 else ""))
+    print(
+        f"Entry: Buffer {ENTRY_TRIGGER_BUFFER_PCT}% | Expire {ENTRY_EXPIRATION_MIN} min"
+        + (f" + Expire-Price ±{ENTRY_EXPIRATION_PRICE_PCT}% (Gewinnrichtung)" if ENTRY_EXPIRATION_PRICE_PCT>0 else "")
+    )
     if COOLDOWN_SECONDS > 0:
         print(f"Cooldown: {COOLDOWN_SECONDS}s")
     if TEST_MODE:
@@ -509,12 +536,16 @@ def main():
                         sig = parse_signal_from_text(raw)
                         if sig:
                             # Payload #1
-                            p1 = build_altrady_open_payload(sig, ALTRADY_EXCHANGE, ALTRADY_API_KEY, ALTRADY_API_SECRET, LEVERAGE_1)
+                            p1 = build_altrady_open_payload(
+                                sig, ALTRADY_EXCHANGE, ALTRADY_API_KEY, ALTRADY_API_SECRET, LEVERAGE_1
+                            )
                             jobs = [(ALTRADY_WEBHOOK_URL, p1)]
 
                             # Payload #2 (optional)
                             if ALTRADY_WEBHOOK_URL_2 and ALTRADY_API_KEY_2 and ALTRADY_API_SECRET_2 and ALTRADY_EXCHANGE_2:
-                                p2 = build_altrady_open_payload(sig, ALTRADY_EXCHANGE_2, ALTRADY_API_KEY_2, ALTRADY_API_SECRET_2, LEVERAGE_2)
+                                p2 = build_altrady_open_payload(
+                                    sig, ALTRADY_EXCHANGE_2, ALTRADY_API_KEY_2, ALTRADY_API_SECRET_2, LEVERAGE_2
+                                )
                                 jobs.append((ALTRADY_WEBHOOK_URL_2, p2))
 
                             post_to_all_webhooks(jobs)
