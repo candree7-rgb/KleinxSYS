@@ -423,7 +423,7 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         print(f"   Runner% ≈ {runner_pct:.6f}  |  Trail {RUNNER_TRAILING_DIST:.2f}%")
     print(
         "   DCAs: "
-        + (", ".join([f\"{o['quantity_percentage']}%@{o['price']:.6f}\" for o in dca_orders]) if dca_orders else "–")
+        + (", ".join([f"{o['quantity_percentage']}%@{o['price']:.6f}\" for o in dca_orders]) if dca_orders else "–")
     )
     return payload
 
