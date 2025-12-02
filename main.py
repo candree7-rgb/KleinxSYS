@@ -30,50 +30,17 @@ ALTRADY_EXCHANGE_2    = os.getenv("ALTRADY_EXCHANGE_2", "").strip()
 
 QUOTE = os.getenv("QUOTE", "USDT").strip().upper()
 
-# >>> NEU: getrennte Hebel je Webhook
+# Getrennte Hebel je Webhook
 LEVERAGE_1 = int(os.getenv("LEVERAGE_1", "5"))
 LEVERAGE_2 = int(os.getenv("LEVERAGE_2", "10"))
 
-# >>> NEU: Limit für Anzahl Take-Profit-Orders (z.B. Demo: 3–4)
-MAX_TAKE_PROFIT_ORDERS = int(os.getenv("MAX_TAKE_PROFIT_ORDERS", "4"))
-
-# TP-Split (30/30/30) + Runner (10% via SL/Trail abgesichert)
-TP1_PCT             = float(os.getenv("TP1_PCT", "30"))
-TP2_PCT             = float(os.getenv("TP2_PCT", "30"))
-TP3_PCT             = float(os.getenv("TP3_PCT", "30"))
-RUNNER_PCT          = float(os.getenv("RUNNER_PCT", "10"))
-
-# Trailing für Runner
-RUNNER_TRAILING_DIST = float(os.getenv("RUNNER_TRAILING_DIST", "1.5"))
-RUNNER_TP_MULTIPLIER = float(os.getenv("RUNNER_TP_MULTIPLIER", "1.5"))
-
-# Stop-Loss Modus
-# DCA1 (Default): SL = Distanz Entry->DCA1 + SL_BUFFER_PCT
-# DCA2:            SL = Distanz Entry->DCA2 + SL_BUFFER_PCT
-# FIXED:           SL = STOP_FIXED_PERCENTAGE (direkt, in %)
-STOP_PROTECTION_TYPE   = os.getenv("STOP_PROTECTION_TYPE", "FOLLOW_TAKE_PROFIT").strip().upper()
-BASE_STOP_MODE         = os.getenv("BASE_STOP_MODE", "DCA1").strip().upper()  # DCA1|DCA2|FIXED
-SL_BUFFER_PCT          = float(os.getenv("SL_BUFFER_PCT", "4.0"))
-STOP_FIXED_PERCENTAGE  = float(os.getenv("STOP_FIXED_PERCENTAGE", "9.0"))
-
-# DCA Größen (% der Start-Positionsgröße)
-DCA1_QTY_PCT        = float(os.getenv("DCA1_QTY_PCT", "150"))
-DCA2_QTY_PCT        = float(os.getenv("DCA2_QTY_PCT", "0"))    # Default: DCA1-only
-DCA3_QTY_PCT        = float(os.getenv("DCA3_QTY_PCT", "0"))    # Default: DCA1-only
-
-# Fallback DCA-Distanzen (vom Entry, in %)
-DCA1_DIST_PCT       = float(os.getenv("DCA1_DIST_PCT", "5"))
-DCA2_DIST_PCT       = float(os.getenv("DCA2_DIST_PCT", "10"))
-DCA3_DIST_PCT       = float(os.getenv("DCA3_DIST_PCT", "20"))
-
 # Limit-Order Ablauf (Zeit – generelle Max-Dauer)
-ENTRY_EXPIRATION_MIN= int(os.getenv("ENTRY_EXPIRATION_MIN", "180"))
+ENTRY_EXPIRATION_MIN        = int(os.getenv("ENTRY_EXPIRATION_MIN", "180"))
 
 # Entry-Condition
-ENTRY_WAIT_MINUTES         = int(os.getenv("ENTRY_WAIT_MINUTES", "0"))             # 0 = keine Zeit-Bedingung
-ENTRY_TRIGGER_BUFFER_PCT   = float(os.getenv("ENTRY_TRIGGER_BUFFER_PCT", "0.0"))   # Trigger-Puffer
-# Wir nutzen das als "Impuls schon gelaufen" – z.B. 0.8 %
-ENTRY_EXPIRATION_PRICE_PCT = float(os.getenv("ENTRY_EXPIRATION_PRICE_PCT", "0.0"))
+ENTRY_WAIT_MINUTES          = int(os.getenv("ENTRY_WAIT_MINUTES", "0"))           # 0 = keine Zeit-Bedingung
+ENTRY_TRIGGER_BUFFER_PCT    = float(os.getenv("ENTRY_TRIGGER_BUFFER_PCT", "0.0")) # z.B. 0.0 oder 0.8
+ENTRY_EXPIRATION_PRICE_PCT  = float(os.getenv("ENTRY_EXPIRATION_PRICE_PCT", "0.0"))
 
 TEST_MODE           = os.getenv("TEST_MODE", "false").lower() == "true"    # Für Tests
 
@@ -101,7 +68,7 @@ if not ALTRADY_API_KEY or not ALTRADY_API_SECRET:
 
 HEADERS = {
     "Authorization": DISCORD_TOKEN,
-    "User-Agent": "DiscordToAltrady/2.5-multiwebhook"
+    "User-Agent": "DiscordToAltrady/3.0-entry-only"
 }
 
 # =========================
@@ -147,6 +114,7 @@ def fetch_messages_after(channel_id: str, after_id: Optional[str], limit: int = 
                     retry = float(r.json().get("retry_after", 5))
             except:
                 pass
+            print(f"⚠️ Rate Limit, warte {retry} Sekunden...")
             time.sleep(retry + 0.5)
             continue
         r.raise_for_status()
@@ -206,7 +174,7 @@ def message_text(m: dict) -> str:
     return clean_markdown("\n".join([p for p in parts if p]))
 
 # =========================
-# Signal Parsing
+# Signal Parsing (nur Pair, Side, Entry)
 # =========================
 PAIR_LINE_OLD   = re.compile(r"(^|\n)\s*([A-Z0-9]+)\s+(LONG|SHORT)\s+Signal\s*(\n|$)", re.I)
 HDR_SLASH_PAIR  = re.compile(r"([A-Z0-9]+)\s*/\s*[A-Z0-9]+\b.*\b(LONG|SHORT)\b", re.I)
@@ -215,13 +183,6 @@ HDR_COIN_DIR    = re.compile(r"Coin\s*:\s*([A-Z0-9]+).*?Direction\s*:\s*(LONG|SH
 ENTER_ON_TRIGGER = re.compile(r"Enter\s+on\s+Trigger\s*:\s*\$?\s*"+NUM, re.I)
 ENTRY_COLON      = re.compile(r"\bEntry\s*:\s*\$?\s*"+NUM, re.I)
 ENTRY_SECTION    = re.compile(r"\bENTRY\b\s*\n\s*\$?\s*"+NUM, re.I)
-
-TP1_LINE  = re.compile(r"\bTP\s*1\s*:\s*\$?\s*"+NUM, re.I)
-TP2_LINE  = re.compile(r"\bTP\s*2\s*:\s*\$?\s*"+NUM, re.I)
-TP3_LINE  = re.compile(r"\bTP\s*3\s*:\s*\$?\s*"+NUM, re.I)
-DCA1_LINE = re.compile(r"\bDCA\s*#?\s*1\s*:\s*\$?\s*"+NUM, re.I)
-DCA2_LINE = re.compile(r"\bDCA\s*#?\s*2\s*:\s*\$?\s*"+NUM, re.I)
-DCA3_LINE = re.compile(r"\bDCA\s*#?\s*3\s*:\s*\$?\s*"+NUM, re.I)
 
 def find_base_side(txt: str):
     mh = HDR_SLASH_PAIR.search(txt)
@@ -242,33 +203,6 @@ def find_entry(txt: str) -> Optional[float]:
             return to_price(m.group(1))
     return None
 
-def find_tp_dca(txt: str):
-    tps = []
-    for rx in (TP1_LINE, TP2_LINE, TP3_LINE):
-        m = rx.search(txt)
-        tps.append(to_price(m.group(1)) if m else None)
-    dcas = []
-    for rx in (DCA1_LINE, DCA2_LINE, DCA3_LINE):
-        m = rx.search(txt)
-        dcas.append(to_price(m.group(1)) if m else None)
-    return tps, dcas
-
-def backfill_dcas_if_missing(side: str, entry: float, dcas: list) -> list:
-    d1, d2, d3 = dcas
-    if d1 is None:
-        d1 = entry * (1 + DCA1_DIST_PCT/100.0) if side=="short" else entry * (1 - DCA1_DIST_PCT/100.0)
-    if d2 is None:
-        d2 = entry * (1 + DCA2_DIST_PCT/100.0) if side=="short" else entry * (1 - DCA2_DIST_PCT/100.0)
-    if d3 is None:
-        d3 = entry * (1 + DCA3_DIST_PCT/100.0) if side=="short" else entry * (1 - DCA3_DIST_PCT/100.0)
-    return [d1, d2, d3]
-
-def plausible(side: str, entry: float, tp1: float, tp2: float, tp3: float, d1: float, d2: float, d3: float) -> bool:
-    if side == "long":
-        return (tp1>entry and tp2>entry and tp3>entry and d1<entry and d2<entry and d3<entry)
-    else:
-        return (tp1<entry and tp2<entry and tp3<entry and d1>entry and d2>entry and d3>entry)
-
 def parse_signal_from_text(txt: str):
     base, side = find_base_side(txt)
     if not base or not side:
@@ -276,110 +210,35 @@ def parse_signal_from_text(txt: str):
     entry = find_entry(txt)
     if entry is None:
         return None
-    (tp1, tp2, tp3), (d1, d2, d3) = find_tp_dca(txt)
-    if None in (tp1, tp2, tp3):
-        return None
-    d1, d2, d3 = backfill_dcas_if_missing(side, entry, [d1, d2, d3])
-    if not plausible(side, entry, tp1, tp2, tp3, d1, d2, d3):
-        return None
     return {
-        "base": base, "side": side, "entry": entry,
-        "tp1": tp1, "tp2": tp2, "tp3": tp3,
-        "dca1": d1, "dca2": d2, "dca3": d3
+        "base": base,
+        "side": side,
+        "entry": entry
     }
 
 # =========================
-# Altrady Payload
+# Altrady Payload (nur Entry)
 # =========================
-def _percent_from_entry(entry: float, target: float) -> float:
-    """Preis -> Prozent relativ zum Entry; >0 über Entry, <0 unter Entry."""
-    return (target / entry - 1.0) * 100.0
-
-def _compute_stop_percentage(entry: float, d1: float, d2: float) -> float:
-    mode = BASE_STOP_MODE
-    if mode == "FIXED":
-        return float(STOP_FIXED_PERCENTAGE)
-    anchor_price = None
-    if mode == "DCA2" and d2 is not None:
-        anchor_price = d2
-    else:
-        anchor_price = d1  # Default: DCA1
-    anchor_dist = abs((anchor_price - entry) / entry) * 100.0
-    return anchor_dist + SL_BUFFER_PCT
-
 def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secret: str, leverage: int) -> dict:
-    base, side, entry = sig["base"], sig["side"], sig["entry"]
-    tp1, tp2, tp3 = sig["tp1"], sig["tp2"], sig["tp3"]
-    d1, d2, d3 = sig["dca1"], sig["dca2"], sig["dca3"]
+    base  = sig["base"]
+    side  = sig["side"]
+    entry = sig["entry"]
 
     symbol = f"{exchange}_{QUOTE}_{base}"
 
-    # Stop-Loss (in %)
-    stop_percentage = _compute_stop_percentage(entry, d1, d2)
-
-    # Entry-Trigger bleibt Preis-basiert
+    # Entry-Trigger & Expiration-Price
     if side == "long":
         trigger_price = entry * (1.0 - ENTRY_TRIGGER_BUFFER_PCT/100.0)
-        # EXPIRATION-PRICE: Long → oben (Gewinnrichtung)
         expire_price  = (
             entry * (1.0 + ENTRY_EXPIRATION_PRICE_PCT/100.0)
             if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
         )
     else:
         trigger_price = entry * (1.0 + ENTRY_TRIGGER_BUFFER_PCT/100.0)
-        # EXPIRATION-PRICE: Short → unten (Gewinnrichtung)
         expire_price  = (
             entry * (1.0 - ENTRY_EXPIRATION_PRICE_PCT/100.0)
             if ENTRY_EXPIRATION_PRICE_PCT > 0 else None
         )
-
-    # Take Profits als Prozent (folgen Avg-Entry nach DCA)
-    tp1_pct = _percent_from_entry(entry, tp1) if tp1 is not None else None
-    tp2_pct = _percent_from_entry(entry, tp2) if tp2 is not None else None
-    tp3_pct = _percent_from_entry(entry, tp3) if tp3 is not None else None
-
-    take_profits = []
-    if tp1_pct is not None:
-        take_profits.append({
-            "price_percentage": float(f"{tp1_pct:.6f}"),
-            "position_percentage": TP1_PCT
-        })
-    if tp2_pct is not None:
-        take_profits.append({
-            "price_percentage": float(f"{tp2_pct:.6f}"),
-            "position_percentage": TP2_PCT
-        })
-    if tp3_pct is not None:
-        take_profits.append({
-            "price_percentage": float(f"{tp3_pct:.6f}"),
-            "position_percentage": TP3_PCT
-        })
-
-    # Runner prozentual (von TP3 aus weiter)
-    runner_pct = None
-    if RUNNER_PCT > 0 and tp3 is not None:
-        runner_price = tp3 * RUNNER_TP_MULTIPLIER if side == "long" else tp3 / RUNNER_TP_MULTIPLIER
-        runner_pct = _percent_from_entry(entry, runner_price)
-        take_profits.append({
-            "price_percentage": float(f"{runner_pct:.6f}"),
-            "position_percentage": RUNNER_PCT,
-            "trailing_distance": RUNNER_TRAILING_DIST
-        })
-
-    # Limit Anzahl Take-Profit-Orders (z.B. Demo-Account)
-    if MAX_TAKE_PROFIT_ORDERS > 0 and len(take_profits) > MAX_TAKE_PROFIT_ORDERS:
-        take_profits = take_profits[:MAX_TAKE_PROFIT_ORDERS]
-        if len(take_profits) < 4:
-            runner_pct = None  # Runner ggf. abgeschnitten
-
-    # DCAs als fixe Preislevels (so wie Signale kommen)
-    dca_orders = []
-    if DCA1_QTY_PCT > 0 and d1 is not None:
-        dca_orders.append({"price": d1, "quantity_percentage": DCA1_QTY_PCT})
-    if DCA2_QTY_PCT > 0 and d2 is not None:
-        dca_orders.append({"price": d2, "quantity_percentage": DCA2_QTY_PCT})
-    if DCA3_QTY_PCT > 0 and d3 is not None:
-        dca_orders.append({"price": d3, "quantity_percentage": DCA3_QTY_PCT})
 
     payload = {
         "api_key": api_key,
@@ -391,17 +250,15 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         "order_type": "limit",
         "signal_price": entry,
         "leverage": leverage,
-        "entry_condition": { "price": float(f"{trigger_price:.10f}") },
-        "take_profit": take_profits,
-        "stop_loss": {
-            "stop_percentage": float(f"{stop_percentage:.6f}"),
-            "protection_type": STOP_PROTECTION_TYPE
+        "entry_condition": {
+            "price": float(f"{trigger_price:.10f}")
         },
-        "dca_orders": dca_orders,
-        "entry_expiration": { "time": ENTRY_EXPIRATION_MIN }
+        "entry_expiration": {
+            "time": ENTRY_EXPIRATION_MIN
+        }
+        # KEINE take_profit, stop_loss, dca_orders – das macht der Bot
     }
 
-    # Wenn wir eine Expiration-Price-Logik (z.B. 0.8 %) haben → mitschicken
     if expire_price is not None:
         payload["entry_expiration"]["price"] = float(f"{expire_price:.10f}")
 
@@ -418,13 +275,7 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         f"   Trigger @ {trigger_price:.6f}  |  Expire in {ENTRY_EXPIRATION_MIN} min"
         + (f" oder Preis {expire_price:.6f}" if expire_price else "")
     )
-    print(f"   SL-Modus: {BASE_STOP_MODE}  → {stop_percentage:.2f}% unter/über Entry")
-    if RUNNER_PCT > 0 and runner_pct is not None:
-        print(f"   Runner% ≈ {runner_pct:.6f}  |  Trail {RUNNER_TRAILING_DIST:.2f}%")
-    print(
-    "   DCAs: "
-    + (", ".join([f"{o['quantity_percentage']}%@{o['price']:.6f}" for o in dca_orders]) if dca_orders else "-")
-)
+
     return payload
 
 # =========================
@@ -435,6 +286,7 @@ def _post_one(url: str, payload: dict):
     for attempt in range(3):
         try:
             r = requests.post(url, json=payload, timeout=20)
+
             if r.status_code == 429:
                 delay = 2.0
                 try:
@@ -442,6 +294,7 @@ def _post_one(url: str, payload: dict):
                         delay = float(r.json().get("retry_after", 2.0))
                 except:
                     pass
+                print(f"   ⚠️ Rate Limit, warte {delay} Sekunden...")
                 time.sleep(delay + 0.25)
                 continue
 
@@ -449,14 +302,20 @@ def _post_one(url: str, payload: dict):
                 print("   ✅ Erfolg! Pending order angelegt (wartet auf Trigger).")
                 return r
 
-            r.raise_for_status()
+            if not r.ok:
+                # Debug: zeig uns die Server-Antwort (z.B. bei 422)
+                print(f"   ❌ Server-Antwort {r.status_code}: {r.text}")
+                r.raise_for_status()
+
             print("   ✅ Erfolg!")
             return r
         except Exception as e:
             if attempt == 2:
                 print(f"   ❌ Fehler bei {url}: {e}")
                 raise
-            time.sleep(1.5 * (attempt + 1))
+            wait = 1.5 * (attempt + 1)
+            print(f"   ⚠️ Retry in {wait:.1f}s wegen: {e}")
+            time.sleep(wait)
 
 def post_to_all_webhooks(payloads_and_urls: List[Tuple[str, dict]]):
     last_resp = None
@@ -474,20 +333,17 @@ def post_to_all_webhooks(payloads_and_urls: List[Tuple[str, dict]]):
 # =========================
 def main():
     print("="*50)
-    print("🚀 Discord → Altrady Bot v2.6 (Percent TPs, SL@DCA1 default, Runner)")
+    print("🚀 Discord → Altrady Bot v3.0 (Entry-only, TPs/DCA/SL im Bot)")
     print("="*50)
     print(f"Exchange #1: {ALTRADY_EXCHANGE} | Leverage: {LEVERAGE_1}x")
     if ALTRADY_WEBHOOK_URL_2 and ALTRADY_API_KEY_2 and ALTRADY_API_SECRET_2 and ALTRADY_EXCHANGE_2:
         print(f"Exchange #2: {ALTRADY_EXCHANGE_2} | Leverage: {LEVERAGE_2}x")
-    print(f"TP-Splits: {TP1_PCT}/{TP2_PCT}/{TP3_PCT}% + Runner {RUNNER_PCT}%")
-    print(f"Max TP-Orders: {MAX_TAKE_PROFIT_ORDERS}")
-    print(f"DCAs: D1 {DCA1_QTY_PCT}%, D2 {DCA2_QTY_PCT}%, D3 {DCA3_QTY_PCT}%")
-    print(f"Stop: {BASE_STOP_MODE} + Buffer {SL_BUFFER_PCT}%"
-          + (f" | FIXED={STOP_FIXED_PERCENTAGE}%" if BASE_STOP_MODE=='FIXED' else ""))
     print(
         f"Entry: Buffer {ENTRY_TRIGGER_BUFFER_PCT}% | Expire {ENTRY_EXPIRATION_MIN} min"
         + (f" + Expire-Price ±{ENTRY_EXPIRATION_PRICE_PCT}% (Gewinnrichtung)" if ENTRY_EXPIRATION_PRICE_PCT>0 else "")
     )
+    if ENTRY_WAIT_MINUTES > 0:
+        print(f"Entry-Condition Time: {ENTRY_WAIT_MINUTES} min (OR)")
     if COOLDOWN_SECONDS > 0:
         print(f"Cooldown: {COOLDOWN_SECONDS}s")
     if TEST_MODE:
@@ -563,6 +419,7 @@ def main():
             break
         except Exception as e:
             print(f"❌ Fehler: {e}")
+            traceback.print_exc()
             time.sleep(10)
         finally:
             sleep_until_next_tick()
