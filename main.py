@@ -30,6 +30,10 @@ ALTRADY_EXCHANGE_2    = os.getenv("ALTRADY_EXCHANGE_2", "").strip()
 
 QUOTE = os.getenv("QUOTE", "USDT").strip().upper()
 
+ORDER_TYPE = os.getenv("ORDER_TYPE", "market").strip().lower()
+if ORDER_TYPE not in ("market", "limit"):
+    ORDER_TYPE = "market"
+
 # Getrennte Hebel je Webhook
 LEVERAGE_1 = int(os.getenv("LEVERAGE_1", "5"))
 LEVERAGE_2 = int(os.getenv("LEVERAGE_2", "10"))
@@ -247,7 +251,7 @@ def build_altrady_open_payload(sig: dict, exchange: str, api_key: str, api_secre
         "action": "open",
         "symbol": symbol,
         "side": side,
-        "order_type": "limit",
+        "order_type": ORDER_TYPE, 
         "signal_price": entry,
         "leverage": leverage,
         "entry_condition": {
